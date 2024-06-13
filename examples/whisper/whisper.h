@@ -50,7 +50,9 @@ extern "C" {
     //
     //     ...
     //
-    //     struct whisper_context * ctx = whisper_init_from_file("/path/to/ggml-base.en.bin");
+    //     whisper_context_params cparams = whisper_context_default_params();
+    //
+    //     struct whisper_context * ctx = whisper_init_from_file_with_params("/path/to/ggml-base.en.bin", cparams);
     //
     //     if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
     //         fprintf(stderr, "failed to process audio\n");
@@ -82,8 +84,46 @@ extern "C" {
     typedef int32_t whisper_token;
     typedef int32_t whisper_seq_id;
 
+    enum whisper_alignment_heads_preset {
+        WHISPER_AHEADS_NONE,
+        WHISPER_AHEADS_N_TOP_MOST,  // All heads from the N-top-most text-layers
+        WHISPER_AHEADS_CUSTOM,
+        WHISPER_AHEADS_TINY_EN,
+        WHISPER_AHEADS_TINY,
+        WHISPER_AHEADS_BASE_EN,
+        WHISPER_AHEADS_BASE,
+        WHISPER_AHEADS_SMALL_EN,
+        WHISPER_AHEADS_SMALL,
+        WHISPER_AHEADS_MEDIUM_EN,
+        WHISPER_AHEADS_MEDIUM,
+        WHISPER_AHEADS_LARGE_V1,
+        WHISPER_AHEADS_LARGE_V2,
+        WHISPER_AHEADS_LARGE_V3,
+    };
+
+    typedef struct whisper_ahead {
+        int n_text_layer;
+        int n_head;
+    } whisper_ahead;
+
+    typedef struct whisper_aheads {
+        size_t n_heads;
+        const whisper_ahead * heads;
+    } whisper_aheads;
+
     struct whisper_context_params {
         bool  use_gpu;
+        bool  flash_attn;
+        int   gpu_device;  // CUDA device
+
+        // [EXPERIMENTAL] Token-level timestamps with DTW
+        bool dtw_token_timestamps;
+        enum whisper_alignment_heads_preset dtw_aheads_preset;
+
+        int dtw_n_top;
+        struct whisper_aheads dtw_aheads;
+
+        size_t dtw_mem_size; // TODO: remove
     };
 
     typedef struct whisper_token_data {
@@ -99,6 +139,11 @@ extern "C" {
         // do not use if you haven't computed token-level timestamps
         int64_t t0;        // start time of the token
         int64_t t1;        //   end time of the token
+
+        // [EXPERIMENTAL] Token-level timestamps with DTW
+        // do not use if you haven't computed token-level timestamps with dtw
+        // Roughly corresponds to the moment in audio in which the token was output
+        int64_t t_dtw;
 
         float vlen;        // voice length of the token
     } whisper_token_data;
@@ -293,13 +338,17 @@ extern "C" {
     // Convert the provided text into tokens.
     // The tokens pointer must be large enough to hold the resulting tokens.
     // Returns the number of tokens on success, no more than n_max_tokens
-    // Returns -1 on failure
+    // Returns a negative number on failure - the number of tokens that would have been returned
     // TODO: not sure if correct
     WHISPER_API int whisper_tokenize(
             struct whisper_context * ctx,
                         const char * text,
                      whisper_token * tokens,
                                int   n_max_tokens);
+
+    // Return the number of tokens in the provided text
+    // Equivalent to: -whisper_tokenize(ctx, text, NULL, 0)
+    int whisper_token_count(struct whisper_context * ctx, const char * text);
 
     // Largest language id (i.e. number of available languages - 1)
     WHISPER_API int whisper_lang_max_id();
@@ -312,6 +361,9 @@ extern "C" {
 
     // Return the short string of the specified language id (e.g. 2 -> "de"), returns nullptr if not found
     WHISPER_API const char * whisper_lang_str(int id);
+
+    // Return the short string of the specified language name (e.g. 2 -> "german"), returns nullptr if not found
+    WHISPER_API const char * whisper_lang_str_full(int id);
 
     // Use mel data at offset_ms to try and auto-detect the spoken language
     // Make sure to call whisper_pcm_to_mel() or whisper_set_mel() first
@@ -406,11 +458,6 @@ extern "C" {
     // If it returns false, the computation is aborted
     typedef bool (*whisper_encoder_begin_callback)(struct whisper_context * ctx, struct whisper_state * state, void * user_data);
 
-    // Abort callback
-    // If not NULL, called before ggml computation
-    // If it returns true, the computation is aborted
-    typedef bool (*whisper_abort_callback)(void * user_data);
-
     // Logits filter callback
     // Can be used to modify the logits before sampling
     // If not NULL, called after applying temperature to logits
@@ -459,8 +506,13 @@ extern "C" {
         // [EXPERIMENTAL] [TDRZ] tinydiarize
         bool tdrz_enable;       // enable tinydiarize speaker turn detection
 
+        // A regular expression that matches tokens to suppress
+        const char * suppress_regex;
+
         // tokens to provide to the whisper decoder as initial prompt
         // these are prepended to any existing text context from a previous call
+        // use whisper_tokenize() to convert text to tokens
+        // maximum of whisper_n_text_ctx()/2 tokens are used (typically 224)
         const char * initial_prompt;
         const whisper_token * prompt_tokens;
         int prompt_n_tokens;
@@ -507,7 +559,7 @@ extern "C" {
         void * encoder_begin_callback_user_data;
 
         // called each time before ggml computation starts
-        whisper_abort_callback abort_callback;
+        ggml_abort_callback abort_callback;
         void * abort_callback_user_data;
 
         // called by each decoder to filter obtained logits

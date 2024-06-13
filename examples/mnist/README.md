@@ -3,11 +3,16 @@
 These are simple examples of how to use GGML for inferencing.
 The first example uses convolutional neural network (CNN), the second one uses fully connected neural network.
 
-## Building the examples
+## Python environment setup and build the examples
 
 ```bash
 git clone https://github.com/ggerganov/ggml
 cd ggml
+# Install python dependencies in a virtual environment
+python3 -m venv ggml_env
+source ./ggml_env/bin/activate
+pip install -r requirements.txt
+# Build the examples
 mkdir build && cd build
 cmake ..
 make -j4 mnist-cnn mnist
@@ -122,7 +127,7 @@ The example can be compiled with Emscripten like this:
 
 ```bash
 cd examples/mnist
-emcc -I../../include -I../../include/ggml -I../../examples ../../src/ggml.c main.cpp -o web/mnist.js -s EXPORTED_FUNCTIONS='["_wasm_eval","_wasm_random_digit","_malloc","_free"]' -s EXPORTED_RUNTIME_METHODS='["ccall"]' -s ALLOW_MEMORY_GROWTH=1 --preload-file models/mnist
+emcc -I../../include -I../../include/ggml -I../../examples ../../src/ggml.c ../../src/ggml-quants.c main.cpp -o web/mnist.js -s EXPORTED_FUNCTIONS='["_wasm_eval","_wasm_random_digit","_malloc","_free"]' -s EXPORTED_RUNTIME_METHODS='["ccall"]' -s ALLOW_MEMORY_GROWTH=1 --preload-file models/mnist
 ```
 
 Online demo: https://mnist.ggerganov.com

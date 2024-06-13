@@ -21,6 +21,13 @@
 #include <string>
 #include <vector>
 
+static void ggml_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
+    (void) level;
+    (void) user_data;
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 struct test_model {
     struct ggml_tensor * a;
     struct ggml_tensor * b;
@@ -52,8 +59,8 @@ void load_model(test_model & model, bool use_gpu = false) {
 
     size_t buffer_size = 0;
     {
-        buffer_size += KW * KH * IC * OC * ggml_type_sizef(GGML_TYPE_F16); // tensor a
-        buffer_size += IW * IH * IC * N * ggml_type_sizef(GGML_TYPE_F32); // tensor b
+        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
+        buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
         buffer_size += 1024; // overhead
     }
 
@@ -71,7 +78,7 @@ void load_model(test_model & model, bool use_gpu = false) {
 #ifdef GGML_USE_CUBLAS
     if (use_gpu) {
         fprintf(stderr, "%s: using CUDA backend\n", __func__);
-        model.backend = ggml_backend_cuda_init();
+        model.backend = ggml_backend_cuda_init(0);
         if (!model.backend) {
             fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
         }
@@ -81,7 +88,7 @@ void load_model(test_model & model, bool use_gpu = false) {
 #ifdef GGML_USE_METAL
     if (use_gpu) {
         fprintf(stderr, "%s: using Metal backend\n", __func__);
-        ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
+        ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         model.backend = ggml_backend_metal_init();
         if (!model.backend) {
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
@@ -104,10 +111,10 @@ void load_model(test_model & model, bool use_gpu = false) {
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
 
     // create a allocator
-    ggml_allocr * alloc = ggml_allocr_new_from_buffer(model.buffer);
+    struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
 
     // alloc memory
-    ggml_allocr_alloc(alloc, model.a);
+    ggml_tallocr_alloc(&alloc, model.a);
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
@@ -117,7 +124,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     }
 
     // alloc memory
-    ggml_allocr_alloc(alloc, model.b);
+    ggml_tallocr_alloc(&alloc, model.b);
 
     if(ggml_backend_is_cpu(model.backend)
 #ifdef GGML_USE_METAL
@@ -128,18 +135,16 @@ void load_model(test_model & model, bool use_gpu = false) {
     } else {
         ggml_backend_tensor_set(model.b, bdata, 0, ggml_nbytes(model.b));
     }
-
-    ggml_allocr_free(alloc);
 }
 
-struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * allocr) {
+struct ggml_cgraph * build_graph(const test_model& model) {
     static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
     static std::vector<uint8_t> buf(buf_size);
 
     struct ggml_init_params params0 = {
         /*.mem_size   =*/ buf_size,
         /*.mem_buffer =*/ buf.data(),
-        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_gallocr_alloc_graph()
     };
 
     // create a temporally context to build the graph
@@ -155,7 +160,7 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     int d1 = 1;
 
     // split conv2d in fundamental methods for test unit
-    struct ggml_tensor* im2col_0 = ggml_im2col(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, true);
+    struct ggml_tensor* im2col_0 = ggml_im2col(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F16);
     ggml_set_name(im2col_0, "im2col_res");
     ggml_build_forward_expand(gf, im2col_0);
 
@@ -164,19 +169,15 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     ggml_set_name(conv2d_res, "conv2d_res");
     ggml_build_forward_expand(gf, conv2d_res);
 
-    // delete the temporally context used to build the graph
     ggml_free(ctx0);
     return gf;
 }
 
-struct ggml_cgraph * compute_graph(const test_model & model, struct ggml_allocr * allocr) {
-    // reset the allocator to free all the memory allocated during the previous inference
-    ggml_allocr_reset(allocr);
-
-    struct ggml_cgraph * gf = build_graph(model, allocr);
+struct ggml_cgraph * compute_graph(const test_model & model, ggml_gallocr_t allocr) {
+    struct ggml_cgraph * gf = build_graph(model);
 
     // allocate tensors
-    ggml_allocr_alloc_graph(allocr, gf);
+    ggml_gallocr_alloc_graph(allocr, gf);
     int n_threads = 1;
 
     if (ggml_backend_is_cpu(model.backend)) {
@@ -193,7 +194,6 @@ struct ggml_cgraph * compute_graph(const test_model & model, struct ggml_allocr 
 
     //ggml_graph_print(gf);
 
-    // in this case, the output tensor is the last one in the graph
     return gf;
 }
 
@@ -204,20 +204,17 @@ int main(void)
     test_model model;
     load_model(model, true);
 
-    ggml_backend_buffer_t buf_compute; // for compute
-    struct ggml_allocr * allocr = NULL;
+    ggml_gallocr_t allocr = NULL;
 
     {
-        allocr = ggml_allocr_new_measure_from_backend(model.backend);
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
 
         //create the worst case graph for memory usage estimation
-        struct ggml_cgraph * gf = build_graph(model, allocr);
-        size_t mem_size = ggml_allocr_alloc_graph(allocr, gf);
-        ggml_allocr_free(allocr);
+        struct ggml_cgraph * gf = build_graph(model);
 
         // compute the required memory
-        buf_compute = ggml_backend_alloc_buffer(model.backend, mem_size);
-        allocr = ggml_allocr_new_from_buffer(buf_compute);
+        ggml_gallocr_reserve(allocr, gf);
+        size_t mem_size = ggml_gallocr_get_buffer_size(allocr, 0);
         fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
     }
 
@@ -394,7 +391,7 @@ int main(void)
     ggml_free(model.ctx);
 
     ggml_backend_buffer_free(model.buffer);
-    ggml_backend_buffer_free(buf_compute);
     ggml_backend_free(model.backend);
+    ggml_gallocr_free(allocr);
     return 0;
 }

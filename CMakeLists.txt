@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.3)
+cmake_minimum_required (VERSION 3.12)
 project(ggml VERSION 0.1.0)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS "on")
@@ -39,13 +39,28 @@ option(GGML_BUILD_EXAMPLES          "ggml: build examples" ${GGML_STANDALONE})
 
 option(GGML_TEST_COVERAGE           "ggml: enable test coverage" OFF)
 
-option(GGML_PERF                    "ggml: enable perf timings"          OFF)
-option(GGML_NO_ACCELERATE           "ggml: disable Accelerate framework" OFF)
-option(GGML_OPENBLAS                "ggml: use OpenBLAS"                 ON)
-option(GGML_CLBLAST                 "ggml: use clBLAST"                  OFF)
-option(GGML_CUBLAS                  "ggml: use cuBLAS"                   OFF)
-option(GGML_METAL                   "ggml: use Metal"                    OFF)
+option(GGML_PERF                    "ggml: enable perf timings"               OFF)
+option(GGML_NO_ACCELERATE           "ggml: disable Accelerate framework"      OFF)
+option(GGML_OPENBLAS                "ggml: use OpenBLAS"                      ON)
+option(GGML_CLBLAST                 "ggml: use clBLAST"                       OFF)
+option(GGML_HIPBLAS                 "ggml: use hipBLAS"                       OFF)
+option(GGML_CUDA                    "ggml: use CUDA"                          OFF)
+option(GGML_CUBLAS                  "ggml: use CUDA (deprecated)"             OFF)
+option(GGML_METAL                   "ggml: use Metal"                         OFF)
+option(GGML_METAL_NDEBUG            "ggml: disable Metal debugging"           OFF)
+option(GGML_METAL_SHADER_DEBUG      "ggml: compile Metal with -fno-fast-math" OFF)
+option(GGML_METAL_EMBED_LIBRARY     "ggml: embed Metal library"               OFF)
+option(GGML_RPC                     "ggml: use RPC"                           OFF)
+option(GGML_VULKAN                  "ggml: use Vulkan"                        OFF)
 
+option(GGML_CUDA_FORCE_DMMV                 "ggml: use dmmv instead of mmvq CUDA kernels"     OFF)
+option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
+set(GGML_CUDA_DMMV_X      "32" CACHE STRING "ggml: x stride for dmmv CUDA kernels")
+set(GGML_CUDA_MMV_Y        "1" CACHE STRING "ggml: y block size for mmv CUDA kernels")
+option(GGML_CUDA_F16                        "ggml: use 16 bit floats for some calculations"   OFF)
+set(GGML_CUDA_KQUANTS_ITER "2" CACHE STRING "ggml: iters./thread per block for Q2_K/Q6_K")
+set(GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
+                                            "ggml: max. batch size for using peer access")
 # sanitizers
 
 if (GGML_SANITIZE_THREAD)
@@ -96,11 +111,12 @@ if (GGML_ALL_WARNINGS)
 endif()
 
 if (NOT MSVC)
-    add_compile_options(
-        "$<$<COMPILE_LANGUAGE:C>:-Werror=vla>"
-        "$<$<COMPILE_LANGUAGE:CXX>:-Werror=vla>"
-        "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;-Werror=vla>"
-    )
+    # TODO: temporary disabled until we figure out ggml-metal.m
+    #add_compile_options(
+    #    "$<$<COMPILE_LANGUAGE:C>:-Werror=vla>"
+    #    "$<$<COMPILE_LANGUAGE:CXX>:-Werror=vla>"
+    #    "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler;-Werror=vla>"
+    #)
 endif()
 
 #
