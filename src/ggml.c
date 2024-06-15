@@ -3140,12 +3140,7 @@ bool ggml_is_3d(const struct ggml_tensor * tensor) {
 }
 
 int ggml_n_dims(const struct ggml_tensor * tensor) {
-    for (int i = GGML_MAX_DIMS - 1; i >= 1; --i) {
-        if (tensor->ne[i] > 1) {
-            return i + 1;
-        }
-    }
-    return 1;
+    return tensor->n_dims;
 }
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
@@ -3566,6 +3561,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         size_t                view_offs) {
 
     assert(n_dims >= 1 && n_dims <= GGML_MAX_DIMS);
+    //printf("n_dims %d\n", n_dims);
 
     // find the base tensor and absolute offset
     if (view_src != NULL && view_src->view_src != NULL) {
@@ -3637,6 +3633,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
+                n_dims,
         /*.padding      =*/ { 0 },
     };
 
@@ -3732,7 +3729,7 @@ struct ggml_tensor * ggml_new_f32(struct ggml_context * ctx, float value) {
 }
 
 struct ggml_tensor * ggml_dup_tensor(struct ggml_context * ctx, const struct ggml_tensor * src) {
-    return ggml_new_tensor(ctx, src->type, GGML_MAX_DIMS, src->ne);
+    return ggml_new_tensor(ctx, src->type, src->n_dims, src->ne);
 }
 
 static void ggml_set_op_params(struct ggml_tensor * tensor, const void * params, size_t params_size) {
@@ -4237,7 +4234,7 @@ struct ggml_tensor * ggml_format_name(struct ggml_tensor * tensor, const char * 
 struct ggml_tensor * ggml_view_tensor(
         struct ggml_context * ctx,
         struct ggml_tensor  * src) {
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, GGML_MAX_DIMS, src->ne, src, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, src->n_dims, src->ne, src, 0);
     ggml_format_name(result, "%s (view)", src->name);
 
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
@@ -5293,7 +5290,8 @@ struct ggml_tensor * ggml_mul_mat(
     }
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    assert(a->n_dims == b->n_dims);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, a->n_dims, ne);
 
     result->op   = GGML_OP_MUL_MAT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -10269,7 +10267,7 @@ static void ggml_compute_forward_mul_f16(
         struct ggml_tensor * dst) {
     GGML_ASSERT(ggml_can_repeat_rows(src1, src0) && ggml_are_same_shape(src0, dst));
 
-    if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
+    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
     const int ith = params->ith;
@@ -15234,11 +15232,11 @@ static void ggml_compute_forward_im2col_1d_f16(
     GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
     GGML_ASSERT(nb10 == sizeof(float));
 
-    if (params->type == GGML_TASK_INIT) {
+    if (params->type == GGML_TASK_TYPE_INIT) {
         return;
     }
 
-    if (params->type == GGML_TASK_FINALIZE) {
+    if (params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
 
@@ -15306,11 +15304,11 @@ static void ggml_compute_forward_im2col_1d_f32(
     GGML_ASSERT(nb00 == sizeof(float));
     GGML_ASSERT(nb10 == sizeof(float));
 
-    if (params->type == GGML_TASK_INIT) {
+    if (params->type == GGML_TASK_TYPE_INIT) {
         return;
     }
 
-    if (params->type == GGML_TASK_FINALIZE) {
+    if (params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
 
@@ -19886,14 +19884,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     } else {
                         GGML_ASSERT(false);
                     }
-                } break;
-            case GGML_OP_IM2COL:
-                {
-                    n_tasks = n_threads;
-                } break;
-            case GGML_OP_IM2COL_1D:
-                {
-                    n_tasks = n_threads;
                 } break;
             case GGML_OP_CONV_TRANSPOSE_2D:
                 {
