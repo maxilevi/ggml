@@ -15223,7 +15223,6 @@ static void ggml_compute_forward_im2col_1d_f16(
     const int64_t IW = ne10;
 
     const int64_t KW = ne00;
-
     const int64_t OW = ne1;
 
     int ofs0 = nb12;
@@ -15244,26 +15243,24 @@ static void ggml_compute_forward_im2col_1d_f16(
     // im2col: [N, IC, IH, IW] => [N, OH, OW, IC*KH*KW]
     {
         ggml_fp16_t * const wdata = (ggml_fp16_t *) dst->data;
-        //printf("ith %d, nth %d\n", ith, nth);
-        int owic = OW * IC;
-        int part = (N * owic) / nth;
-        int offset = ith * part;
-        for (int sec = offset; sec < offset + part; sec++) {
-            int in = sec / owic;
-            int iow = (sec - in * owic) / IC;
-            int iic = sec - iow * IC;
 
-            // micro kernel
-            ggml_fp16_t * dst_data = wdata + (in*OW + iow)*(IC*KW); // [IC, KH, KW]
-            const float * const src_data = (float *)((char *) src1->data + in*ofs0 + iic*ofs1); // [IH, IW]
+        for (int64_t in = 0; in < N; in++) {
+            for (int64_t iow = 0; iow < OW; iow++) {
+                for (int64_t iic = ith; iic < IC; iic += nth) {
 
-            for (int64_t ikw = 0; ikw < KW; ikw++) {
-                const int64_t iiw = iow*s0 + ikw*d0 - p0;
+                    // micro kernel
+                    ggml_fp16_t * dst_data = wdata + (in*OW + iow)*(IC*KW); // [IC, KW]
+                    const float * const src_data = (float *)((char *) src1->data + in*ofs0 + iic*ofs1); // [IW]
 
-                if (iiw < 0 || iiw >= IW) {
-                    dst_data[iic*KW + ikw] = 0;
-                } else {
-                    dst_data[iic*KW + ikw] = GGML_FP32_TO_FP16(src_data[iiw]);
+                    for (int64_t ikw = 0; ikw < KW; ikw++) {
+                        const int64_t iiw = iow*s0 + ikw*d0 - p0;
+
+                        if (iiw < 0 || iiw >= IW) {
+                            dst_data[iic*KW + ikw] = 0;
+                        } else {
+                            dst_data[iic*KW + ikw] = GGML_FP32_TO_FP16(src_data[iiw]);
+                        }
+                    }
                 }
             }
         }
@@ -15278,6 +15275,7 @@ static void ggml_compute_forward_im2col_1d_f32(
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(false);
 
     int64_t t0 = ggml_perf_time_us();
     UNUSED(t0);
